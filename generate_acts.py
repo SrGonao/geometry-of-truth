@@ -1,52 +1,44 @@
-import torch as t
+import torch as th
 from transformers import (
-    LlamaForCausalLM,
-    LlamaTokenizer,
     AutoTokenizer,
-    OPTForCausalLM,
-    GPTNeoXForCausalLM,
     AutoModelForCausalLM,
+    AutoConfig,
 )
 import argparse
 import pandas as pd
 from tqdm import tqdm
-import os
 import configparser
+from pathlib import Path
 
 config = configparser.ConfigParser()
 config.read("config.ini")
 HF_KEY = config["hf_key"]["hf_key"]
 
 
-class Hook:
-    def __init__(self):
-        self.out = None
-
-    def __call__(self, module, module_inputs, module_outputs):
-        self.out, _ = module_outputs
-
-
-def load_model(model_name, device):
+def load_model(model_name, device, revision=None, shuffle=False, random_init=False):
     print(f"Loading model {model_name}...")
-    try:
-        weights_directory = config[model_name]["weights_directory"]
-        TokenizerClass = eval(config[model_name]["tokenizer_class"])
-        ModelClass = eval(config[model_name]["model_class"])
-        tokenizer = TokenizerClass.from_pretrained(weights_directory, token=HF_KEY)
-        model = ModelClass.from_pretrained(weights_directory, token=HF_KEY)
-        all_layers = eval("model." + config[model_name]["layers"])
-    except:
-        raise ValueError(
-            "Cannot load model, make sure weights and huggingface key are set in config file"
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=HF_KEY,
+        revision=revision,
+    )
+    if random_init:
+        config = AutoConfig.from_pretrained(model_name, revision=revision, token=HF_KEY)
+        model = AutoModelForCausalLM.from_config(config, token=HF_KEY)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            token=HF_KEY,
+            revision=revision,
         )
-    if model_name == "llama-2-13b-reset":
+    if shuffle:
         # create reset network by permuting the weights for each parameter
         for param in model.parameters():
-            param.data = param.data[..., t.randperm(param.size(-1))]
+            param.data = param.data[..., th.randperm(param.size(-1))]
     if device != "cpu":
         model = model.half()
     model.to(device)
-    return tokenizer, model, all_layers
+    return tokenizer, model
 
 
 def load_statements(dataset_name):
@@ -57,35 +49,74 @@ def load_statements(dataset_name):
     statements = dataset["statement"].tolist()
     return statements
 
-
-def get_acts(statements, tokenizer, model, layers, all_layers, device):
+def get_acts(statements, tokenizer, model, layers, device):
     """
     Get given layer activations for the statements.
     Return dictionary of stacked activations.
     """
-    # attach hooks
-    hooks, handles = [], []
-    for layer in layers:
-        hook = Hook()
-        handle = all_layers[layer].register_forward_hook(hook)
-        hooks.append(hook), handles.append(handle)
-
-    # get activations
+    # get last token activations
     acts = {layer: [] for layer in layers}
     for statement in tqdm(statements):
         input_ids = tokenizer.encode(statement, return_tensors="pt").to(device)
-        model(input_ids)
-        for layer, hook in zip(layers, hooks):
-            acts[layer].append(hook.out[0, -1])
+        h_states = model(input_ids, output_hidden_states=True).hidden_states
+        for layer in layers:
+            acts[layer].append(h_states[layer][0, -1].squeeze())
 
     for layer, act in acts.items():
-        acts[layer] = t.stack(act).float()
-
-    # remove hooks
-    for handle in handles:
-        handle.remove()
-
+        acts[layer] = th.stack(act).float()
     return acts
+
+
+@th.no_grad()
+def generate_acts(
+    model_name,
+    layers,
+    datasets,
+    output_dir="acts",
+    noperiod=False,
+    device="cpu",
+    shuffle=False,
+    random_init=False,
+    revision=None,
+):
+    assert (not shuffle) or (not random_init), "Can't shuffle and random init"
+    if device == "auto":
+        device = "cuda" if th.cuda.is_available() else "cpu"
+        print(f"Using device {device}")
+    tokenizer, model = load_model(
+        model_name, device, revision=revision, shuffle=shuffle, random_init=random_init
+    )
+    for dataset in datasets:
+        statements = load_statements(dataset)
+        if noperiod:
+            statements = [statement[:-1] for statement in statements]
+        layers = (
+            layers
+            if layers != [-1]
+            else list(range(model.config.num_hidden_layers + 1))
+        )
+        save_dir = Path(output_dir) / model_name
+        if revision is not None:
+            save_dir = save_dir / revision
+        if shuffle:
+            save_dir = save_dir / "shuffle"
+        if random_init:
+            save_dir = save_dir / "random_init"
+        if noperiod:
+            save_dir = save_dir / "noperiod"
+        save_dir = save_dir / dataset
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        for idx in range(0, len(statements), 25):
+            acts = get_acts(
+                statements[idx : idx + 25],
+                tokenizer,
+                model,
+                layers,
+                device,
+            )
+            for layer, act in acts.items():
+                th.save(act, save_dir / f"layer_{layer}_{idx}.pt")
 
 
 if __name__ == "__main__":
@@ -100,7 +131,13 @@ if __name__ == "__main__":
         default="llama-13b",
         help="Size of the model to use. Options are 7B or 30B",
     )
-    parser.add_argument("--layers", nargs="+", help="Layers to save embeddings from")
+    parser.add_argument(
+        "--layers",
+        nargs="+",
+        help="Layers to save embeddings from. Layer 0 correspond to words embeddings. Default is -1, which saves all layers.",
+        type=int,
+        default=[-1],
+    )
     parser.add_argument(
         "--datasets", nargs="+", help="Names of datasets, without .csv extension"
     )
@@ -113,37 +150,37 @@ if __name__ == "__main__":
         default=False,
         help="Set flag if you don't want to add a period to the end of each statement",
     )
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Device to run on. Set to 'auto' to use cuda if available",
+    )
+    parser.add_argument(
+        "--revision",
+        default=None,
+        help="Revision of model to use. Useful for pythia checkpoints",
+    )
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        default=False,
+        help="Set flag to shuffle weights of model",
+    )
+    parser.add_argument(
+        "--random_init",
+        action="store_true",
+        default=False,
+        help="Set flag to initialize model with random weights",
+    )
     args = parser.parse_args()
-
-    t.set_grad_enabled(False)
-    tokenizer, model, all_layers = load_model(args.model, args.device)
-    for dataset in args.datasets:
-        statements = load_statements(dataset)
-        if args.noperiod:
-            statements = [statement[:-1] for statement in statements]
-        layers = [int(layer) for layer in args.layers]
-        if layers == [-1]:
-            layers = list(range(len(all_layers)))
-        save_dir = os.path.join(f"{args.output_dir}", args.model)
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        if args.noperiod:
-            save_dir = os.path.join(save_dir, "noperiod")
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir)
-        save_dir = os.path.join(save_dir, dataset)
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-
-        for idx in range(0, len(statements), 25):
-            acts = get_acts(
-                statements[idx : idx + 25],
-                tokenizer,
-                model,
-                layers,
-                all_layers,
-                args.device,
-            )
-            for layer, act in acts.items():
-                t.save(act, f"{save_dir}/layer_{layer}_{idx}.pt")
+    generate_acts(
+        args.model,
+        args.layers,
+        args.datasets,
+        output_dir=args.output_dir,
+        noperiod=args.noperiod,
+        device=args.device,
+        shuffle=args.shuffle,
+        random_init=args.random_init,
+        revision=args.revision,
+    )
