@@ -6,7 +6,7 @@ from transformers import (
 )
 import argparse
 import pandas as pd
-from tqdm import tqdm
+from tqdm import trange
 import configparser
 from pathlib import Path
 
@@ -49,6 +49,7 @@ def load_statements(dataset_name):
     statements = dataset["statement"].tolist()
     return statements
 
+
 def get_acts(statements, tokenizer, model, layers, device):
     """
     Get given layer activations for the statements.
@@ -56,7 +57,7 @@ def get_acts(statements, tokenizer, model, layers, device):
     """
     # get last token activations
     acts = {layer: [] for layer in layers}
-    for statement in tqdm(statements):
+    for statement in statements:
         input_ids = tokenizer.encode(statement, return_tensors="pt").to(device)
         h_states = model(input_ids, output_hidden_states=True).hidden_states
         for layer in layers:
@@ -107,7 +108,9 @@ def generate_acts(
         save_dir = save_dir / dataset
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        for idx in range(0, len(statements), 25):
+        for idx in trange(
+            0, len(statements), 25, desc=f"Generating activations for {dataset}"
+        ):
             acts = get_acts(
                 statements[idx : idx + 25],
                 tokenizer,
