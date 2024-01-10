@@ -7,12 +7,12 @@ import random
 
 
 dataset_names = [
-    'cities',
-    'neg_cities',
+    "cities",
+    "neg_cities",
 ]
 
 datasets = [
-    pd.read_csv(f'datasets/{dataset_name}.csv') for dataset_name in dataset_names
+    pd.read_csv(f"datasets/{dataset_name}.csv") for dataset_name in dataset_names
 ]
 
 n_statements = len(datasets[0])
@@ -28,9 +28,13 @@ for dataset, name in zip(datasets, dataset_names):
     statements = []
     has_alices = []
     for (_, row), distractor_idx in zip(dataset.iterrows(), distractor_idxs):
-        statement = f"Alice: {row['statement']}" if distractor_idx == 0 else f"Bob: {row['statement']}"
+        statement = (
+            f"Alice: {row['statement']}"
+            if distractor_idx == 0
+            else f"Bob: {row['statement']}"
+        )
         statements.append(statement)
         has_alices.append(distractor_idx == 0)
-    dataset['statement'] = statements
-    dataset['has_alice'] = has_alices
-    dataset.to_csv(f'datasets/{name}_alice.csv', index=False)
+    dataset["statement"] = statements
+    dataset["has_alice"] = has_alices
+    dataset.to_csv(f"datasets/{name}_alice.csv", index=False)
