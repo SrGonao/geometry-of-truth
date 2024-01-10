@@ -1,10 +1,11 @@
 import torch as t
 import pandas as pd
-import os
 from glob import glob
 import random
+from pathlib import Path
+from generate_acts import generate_acts
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = Path(__file__).parent
 ACTS_BATCH_SIZE = 25
 
 
@@ -47,17 +48,44 @@ def dict_recurse(d, f):
 
 
 def collect_acts(
-    dataset_name, model_size, layer, center=True, scale=False, device="cpu"
+    dataset_name,
+    model_name,
+    layer,
+    center=True,
+    scale=False,
+    device="cpu",
+    noperiod=False,
+    shuffle=False,
+    random_init=False,
+    revision=None,
 ):
     """
     Collects activations from a dataset of statements, returns as a tensor of shape [n_activations, activation_dimension].
     """
-    directory = os.path.join(ROOT, "acts", model_size, dataset_name)
-    activation_files = glob(os.path.join(directory, f"layer_{layer}_*.pt"))
-    acts = [
-        t.load(os.path.join(directory, f"layer_{layer}_{i}.pt")).to(device)
-        for i in range(0, ACTS_BATCH_SIZE * len(activation_files), ACTS_BATCH_SIZE)
-    ]
+    directory = ROOT / "acts" / model_name
+    if revision is not None:
+        directory = directory / revision
+    if shuffle:
+        directory = directory / "shuffle"
+    if random_init:
+        directory = directory / "random_init"
+    if noperiod:
+        directory = directory / "noperiod"
+    directory = directory / dataset_name
+    if not directory.exists() or not any(directory.iterdir()):
+        generate_acts(
+            model_name,
+            [layer],
+            [dataset_name],
+            ROOT / "acts",
+            noperiod=noperiod,
+            shuffle=shuffle,
+            random_init=random_init,
+            device=device,
+            revision=revision,
+        )
+    activation_files = glob(str(directory / f"layer_{layer}_*.pt"))
+    acts = [t.load(file).to(device) for file in activation_files]
     acts = t.cat(acts, dim=0).to(device)
     if center:
         acts = acts - t.mean(acts, dim=0)
@@ -94,7 +122,7 @@ class DataManager:
     def add_dataset(
         self,
         dataset_name,
-        model_size,
+        model_name,
         layer,
         label="label",
         split=None,
@@ -102,16 +130,32 @@ class DataManager:
         center=True,
         scale=False,
         device="cpu",
+        noperiod=False,
+        shuffle=False,
+        random_init=False,
+        revision=None,
     ):
         """
         Add a dataset to the DataManager.
         label : which column of the csv file to use as the labels.
         If split is not None, gives the train/val split proportion. Uses seed for reproducibility.
         """
+        if device == "auto":
+            device = "cuda" if t.cuda.is_available() else "cpu"
+            print(f"Using device {device}")
         acts = collect_acts(
-            dataset_name, model_size, layer, center=center, scale=scale, device=device
+            dataset_name,
+            model_name,
+            layer,
+            center=center,
+            scale=scale,
+            device=device,
+            shuffle=shuffle,
+            random_init=random_init,
+            noperiod=noperiod,
+            revision=revision,
         )
-        df = pd.read_csv(os.path.join(ROOT, "datasets", f"{dataset_name}.csv"))
+        df = pd.read_csv(ROOT / "datasets" / f"{dataset_name}.csv")
         labels = t.Tensor(df[label].values).to(device)
 
         if split is None:
