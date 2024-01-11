@@ -1,4 +1,4 @@
-import torch as t
+import torch as th
 import pandas as pd
 from glob import glob
 import random
@@ -16,16 +16,16 @@ def get_pcs(X, k=2, offset=0):
     """
 
     # Subtract the mean to center the data
-    X = X - t.mean(X, dim=0)
+    X = X - th.mean(X, dim=0)
 
     # Compute the covariance matrix
-    cov_mat = t.mm(X.t(), X) / (X.size(0) - 1)
+    cov_mat = th.mm(X.t(), X) / (X.size(0) - 1)
 
     # Perform eigen decomposition
-    eigenvalues, eigenvectors = t.linalg.eigh(cov_mat)
+    eigenvalues, eigenvectors = th.linalg.eigh(cov_mat)
 
     # Since the eigenvalues and vectors are not necessarily sorted, we do that now
-    sorted_indices = t.argsort(eigenvalues, descending=True)
+    sorted_indices = th.argsort(eigenvalues, descending=True)
     eigenvectors = eigenvectors[:, sorted_indices]
 
     # Select the pcs
@@ -72,7 +72,12 @@ def collect_acts(
     if noperiod:
         directory = directory / "noperiod"
     directory = directory / dataset_name
-    if not directory.exists() or not any(directory.iterdir()):
+    activation_files = glob(str(directory / f"layer_{layer}_*.pt"))
+    if (
+        not directory.exists()
+        or not any(directory.iterdir())
+        or len(activation_files) == 0
+    ):
         generate_acts(
             model_name,
             [layer],
@@ -85,12 +90,12 @@ def collect_acts(
             revision=revision,
         )
     activation_files = glob(str(directory / f"layer_{layer}_*.pt"))
-    acts = [t.load(file).to(device) for file in activation_files]
-    acts = t.cat(acts, dim=0).to(device)
+    acts = [th.load(file).to(device) for file in activation_files]
+    acts = th.cat(acts, dim=0).to(device)
     if center:
-        acts = acts - t.mean(acts, dim=0)
+        acts = acts - th.mean(acts, dim=0)
     if scale:
-        acts = acts / t.std(acts, dim=0)
+        acts = acts / th.std(acts, dim=0)
     return acts
 
 
@@ -107,7 +112,7 @@ def cat_data(d):
         else:
             acts, labels = d[dataset]
             all_acts.append(acts), all_labels.append(labels)
-    return t.cat(all_acts, dim=0), t.cat(all_labels, dim=0)
+    return th.cat(all_acts, dim=0), th.cat(all_labels, dim=0)
 
 
 class DataManager:
@@ -141,7 +146,7 @@ class DataManager:
         If split is not None, gives the train/val split proportion. Uses seed for reproducibility.
         """
         if device == "auto":
-            device = "cuda" if t.cuda.is_available() else "cpu"
+            device = "cuda" if th.cuda.is_available() else "cpu"
             print(f"Using device {device}")
         acts = collect_acts(
             dataset_name,
@@ -156,7 +161,7 @@ class DataManager:
             revision=revision,
         )
         df = pd.read_csv(ROOT / "datasets" / f"{dataset_name}.csv")
-        labels = t.Tensor(df[label].values).to(device)
+        labels = th.Tensor(df[label].values).to(device)
 
         if split is None:
             self.data[dataset_name] = acts, labels
@@ -165,8 +170,8 @@ class DataManager:
             assert 0 < split and split < 1
             if seed is None:
                 seed = random.randint(0, 1000)
-            t.manual_seed(seed)
-            train = t.randperm(len(df)) < int(split * len(df))
+            th.manual_seed(seed)
+            train = th.randperm(len(df)) < int(split * len(df))
             val = ~train
             self.data["train"][dataset_name] = acts[train], labels[train]
             self.data["val"][dataset_name] = acts[val], labels[val]
@@ -200,7 +205,7 @@ class DataManager:
             )
         acts, labels = cat_data(data_dict)
         # if proj and self.proj is not None:
-        #     acts = t.mm(acts, self.proj)
+        #     acts = th.mm(acts, self.proj)
         return acts, labels
 
     def set_pca(self, datasets, k=3, dim_offset=0):
@@ -211,4 +216,4 @@ class DataManager:
         acts, _ = self.get(datasets, proj=False)
         self.proj = get_pcs(acts, k=k, offset=dim_offset)
 
-        self.data = dict_recurse(self.data, lambda x: (t.mm(x[0], self.proj), x[1]))
+        self.data = dict_recurse(self.data, lambda x: (th.mm(x[0], self.proj), x[1]))
