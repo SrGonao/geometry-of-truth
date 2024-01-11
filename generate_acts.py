@@ -4,6 +4,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoConfig,
 )
+import transformer_lens as tl
 import argparse
 import pandas as pd
 from tqdm import trange
@@ -22,6 +23,7 @@ def load_model(model_name, device, revision=None, shuffle=False, random_init=Fal
         token=HF_KEY,
         revision=revision,
     )
+    return tokenizer, None
     if random_init:
         config = AutoConfig.from_pretrained(model_name, revision=revision, token=HF_KEY)
         model = AutoModelForCausalLM.from_config(config, token=HF_KEY)
@@ -37,7 +39,7 @@ def load_model(model_name, device, revision=None, shuffle=False, random_init=Fal
             param.data = param.data[..., th.randperm(param.size(-1))]
     if device != "cpu":
         model = model.half()
-    model.to(device)
+    #model.to(device)
     return tokenizer, model
 
 
@@ -49,6 +51,13 @@ def load_statements(dataset_name):
     statements = dataset["statement"].tolist()
     return statements
 
+def truncate_model(model, layers):
+    stop_at_layer = max(layers)
+    for i in range(model.cfg.n_layers, stop_at_layer, -1):
+        del model.blocks[i-1]
+    del model.blocks[stop_at_layer:]
+    #model.blocks = model.blocks[:stop_at_layer]
+    model.cfg.n_layers = stop_at_layer
 
 def get_acts(statements, tokenizer, model, layers, device):
     """
@@ -59,9 +68,12 @@ def get_acts(statements, tokenizer, model, layers, device):
     acts = {layer: [] for layer in layers}
     for statement in statements:
         input_ids = tokenizer.encode(statement, return_tensors="pt").to(device)
-        h_states = model(input_ids, output_hidden_states=True).hidden_states
+        logits, cache = model.run_with_cache(input_ids)
         for layer in layers:
-            acts[layer].append(h_states[layer][0, -1].squeeze())
+            hook_name = f"blocks.{layer-1}.hook_resid_post"
+            hidden_state = cache[hook_name]
+            hidden_state = hidden_state[0, -1].squeeze()
+            acts[layer].append(hidden_state) #h_states[layer][0, -1].squeeze())
 
     for layer, act in acts.items():
         acts[layer] = th.stack(act).float()
@@ -84,9 +96,17 @@ def generate_acts(
     if device == "auto":
         device = "cuda" if th.cuda.is_available() else "cpu"
         print(f"Using device {device}")
-    tokenizer, model = load_model(
+    tokenizer, _ = load_model(
         model_name, device, revision=revision, shuffle=shuffle, random_init=random_init
     )
+
+    checkpoint_value = revision.split("step")[1]
+    checkpoint_value = int(checkpoint_value)
+    model = tl.HookedTransformer.from_pretrained(model_name=model_name, checkpoint_value=checkpoint_value, device="cpu")
+
+    truncate_model(model, layers)
+    model.to(device)
+
     for dataset in datasets:
         statements = load_statements(dataset)
         if noperiod:
