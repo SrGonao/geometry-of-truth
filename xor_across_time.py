@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 import time
 from transformers import AutoConfig
+from generate_acts import generate_acts
 
 label_names = [
     "has_alice",
@@ -26,7 +27,7 @@ all_checkpoints = (
 )
 
 
-def xor_results(model, device, layers=None, checkpoints=None):
+def xor_results(model, device, layers=None, checkpoints=None, compute_acts=True):
     if device == "auto":
         device = "cuda" if th.cuda.is_available() else "cpu"
         print(f"Using device {device}")
@@ -35,6 +36,16 @@ def xor_results(model, device, layers=None, checkpoints=None):
     if layers is None:
         config = AutoConfig.from_pretrained(model)
         layers = list(range(config.num_hidden_layers + 1))
+    if compute_acts:
+        for checkpoint in checkpoints:
+            print(f"Generating activations for checkpoint {checkpoint}")
+            generate_acts(
+                model,
+                layers,
+                ["cities_alice", "neg_cities_alice"],
+                device=device,
+                revision=f"step{checkpoint}",
+            )
     layer_accs = {}
     for layer in layers:
         checkpoint_accs = {}
@@ -85,10 +96,21 @@ if __name__ == "__main__":
         help="Checkpoints to probe. Default: All checkpoints on a log scale",
         default=None,
     )
+    parser.add_argument(
+        "--disable-acts-computation",
+        action="store_false",
+        default=True,
+        help="Set flag to disable computation of activations. If it is not given,"
+        "activations will be computed for all checkpoints before probing.",
+    )
     args = parser.parse_args()
 
     all_accs = xor_results(
-        args.model, args.device, layers=args.layers, checkpoints=args.checkpoints
+        args.model,
+        args.device,
+        layers=args.layers,
+        checkpoints=args.checkpoints,
+        compute_acts=args.compute_acts,
     )
     df = pd.DataFrame.from_dict(
         {
