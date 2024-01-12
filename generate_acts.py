@@ -61,7 +61,7 @@ def load_model(model_name, device, revision=None, shuffle=False, random_init=Fal
     )
     if random_init:
         config = AutoConfig.from_pretrained(model_name, revision=revision, token=HF_KEY)
-        model = AutoModelForCausalLM.from_config(config, token=HF_KEY)
+        model = AutoModelForCausalLM.from_config(config)
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
