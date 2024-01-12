@@ -27,7 +27,19 @@ all_checkpoints = (
 )
 
 
-def xor_results(model, device, layers=None, checkpoints=None, compute_acts=True):
+def xor_results(
+    model,
+    device,
+    layers=None,
+    checkpoints=None,
+    compute_acts=True,
+    batch_size=1,
+    chunk_size=25,
+):
+    """
+    Compute the accuracy of a logistic regression probe on some XOR features
+    for a given model across depth and time.
+    """
     if device == "auto":
         device = "cuda" if th.cuda.is_available() else "cpu"
         print(f"Using device {device}")
@@ -45,6 +57,8 @@ def xor_results(model, device, layers=None, checkpoints=None, compute_acts=True)
                 ["cities_alice", "neg_cities_alice"],
                 device=device,
                 revision=f"step{checkpoint}",
+                batch_size=batch_size,
+                chunk_size=chunk_size,
             )
     layer_accs = {}
     for layer in layers:
@@ -98,20 +112,37 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--disable-acts-computation",
-        action="store_false",
-        default=True,
+        action="store_true",
+        default=False,
         help="Set flag to disable computation of activations. If it is not given,"
         "activations will be computed for all checkpoints before probing.",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Batch size for generating activations",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=25,
+        help="Number of activations to save per file",
+    )
     args = parser.parse_args()
 
+    # Get results
     all_accs = xor_results(
         args.model,
         args.device,
         layers=args.layers,
         checkpoints=args.checkpoints,
-        compute_acts=args.compute_acts,
+        compute_acts=not args.disable_acts_computation,
+        batch_size=args.batch_size,
+        chunk_size=args.chunk_size,
     )
+
+    # Save results
     df = pd.DataFrame.from_dict(
         {
             (layer, revision): all_accs[layer][revision]
@@ -126,6 +157,8 @@ if __name__ == "__main__":
     path.mkdir(parents=True, exist_ok=True)
     time_id = int(time.time())
     df.to_csv(path / f"results_{time_id}.csv")
+
+    # Plot
     fig = make_subplots(rows=1, cols=1, specs=[[{"type": "bar"}]])
     layers = list(all_accs.keys())
     checkpoint_nbs = list(all_accs[layers[0]].keys())
