@@ -11,6 +11,7 @@ from tqdm import tqdm
 import configparser
 from pathlib import Path
 from glob import glob
+from warnings import warn
 
 config = configparser.ConfigParser()
 config.read("config.ini")
@@ -129,6 +130,13 @@ def generate_acts(
     batch_size=32,
     chunk_size=64,
 ):
+    if batch_size > chunk_size:
+        warn(
+            f"Batch size {batch_size} is greater than chunk size {chunk_size}.\n"
+            "Setting chunk size to batch size."
+        )
+        chunk_size = batch_size
+
     assert (not shuffle) or (not random_init), "Can't shuffle and random init"
     if device == "auto":
         device = "cuda" if th.cuda.is_available() else "cpu"
