@@ -1,12 +1,10 @@
 import torch as th
 import pandas as pd
-from glob import glob
 import random
+from generate_acts import collect_acts
 from pathlib import Path
-from generate_acts import generate_acts
 
 ROOT = Path(__file__).parent
-ACTS_BATCH_SIZE = 25
 
 
 def get_pcs(X, k=2, offset=0):
@@ -45,58 +43,6 @@ def dict_recurse(d, f):
         return out
     else:
         return f(d)
-
-
-def collect_acts(
-    dataset_name,
-    model_name,
-    layer,
-    center=True,
-    scale=False,
-    device="cpu",
-    noperiod=False,
-    shuffle=False,
-    random_init=False,
-    revision=None,
-):
-    """
-    Collects activations from a dataset of statements, returns as a tensor of shape [n_activations, activation_dimension].
-    """
-    directory = ROOT / "acts" / model_name
-    if revision is not None:
-        directory = directory / revision
-    if shuffle:
-        directory = directory / "shuffle"
-    if random_init:
-        directory = directory / "random_init"
-    if noperiod:
-        directory = directory / "noperiod"
-    directory = directory / dataset_name
-    activation_files = glob(str(directory / f"layer_{layer}_*.pt"))
-    if (
-        not directory.exists()
-        or not any(directory.iterdir())
-        or len(activation_files) == 0
-    ):
-        generate_acts(
-            model_name,
-            [layer],
-            [dataset_name],
-            ROOT / "acts",
-            noperiod=noperiod,
-            shuffle=shuffle,
-            random_init=random_init,
-            device=device,
-            revision=revision,
-        )
-    activation_files = glob(str(directory / f"layer_{layer}_*.pt"))
-    acts = [th.load(file).to(device) for file in activation_files]
-    acts = th.cat(acts, dim=0).to(device)
-    if center:
-        acts = acts - th.mean(acts, dim=0)
-    if scale:
-        acts = acts / th.std(acts, dim=0)
-    return acts
 
 
 def cat_data(d):

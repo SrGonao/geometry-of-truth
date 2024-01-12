@@ -9,10 +9,45 @@ import pandas as pd
 from tqdm import trange
 import configparser
 from pathlib import Path
+from glob import glob
 
 config = configparser.ConfigParser()
 config.read("config.ini")
 HF_KEY = config["hf_key"]["hf_key"]
+ROOT = Path(__file__).parent
+
+
+def get_path(
+    model_name,
+    dataset_name,
+    layer=None,
+    shuffle=False,
+    random_init=False,
+    noperiod=False,
+    revision=None,
+    output_dir=None,
+):
+    """
+    Returns the path to the activations for the specified model, dataset, and layer.
+
+    If output_dir is None, uses ROOT / "acts" as the output directory.
+    """
+    if output_dir is None:
+        output_dir = ROOT / "acts"
+    model_dir = output_dir / model_name
+    if revision is not None:
+        model_dir = model_dir / revision
+    if shuffle:
+        model_dir = model_dir / "shuffle"
+    if random_init:
+        model_dir = model_dir / "random_init"
+    if noperiod:
+        model_dir = model_dir / "noperiod"
+    dataset_dir = model_dir / dataset_name
+    if layer is None:
+        return dataset_dir
+    else:
+        return dataset_dir / f"layer_{layer}"
 
 
 def load_model(model_name, device, revision=None, shuffle=False, random_init=False):
@@ -73,7 +108,7 @@ def generate_acts(
     model_name,
     layers,
     datasets,
-    output_dir="acts",
+    output_dir=None,
     noperiod=False,
     device="cpu",
     shuffle=False,
@@ -96,16 +131,15 @@ def generate_acts(
             if layers != [-1]
             else list(range(model.config.num_hidden_layers + 1))
         )
-        save_dir = Path(output_dir) / model_name
-        if revision is not None:
-            save_dir = save_dir / revision
-        if shuffle:
-            save_dir = save_dir / "shuffle"
-        if random_init:
-            save_dir = save_dir / "random_init"
-        if noperiod:
-            save_dir = save_dir / "noperiod"
-        save_dir = save_dir / dataset
+        save_dir = get_path(
+            model_name,
+            dataset,
+            noperiod=noperiod,
+            shuffle=shuffle,
+            random_init=random_init,
+            revision=revision,
+            output_dir=output_dir,
+        )
         save_dir.mkdir(parents=True, exist_ok=True)
 
         for idx in trange(
@@ -119,7 +153,62 @@ def generate_acts(
                 device,
             )
             for layer, act in acts.items():
-                th.save(act, save_dir / f"layer_{layer}_{idx}.pt")
+                layer_dir = save_dir / f"layer_{layer}"
+                layer_dir.mkdir(parents=True, exist_ok=True)
+                th.save(act, layer_dir / f"batch_{idx}.pt")
+
+
+def collect_acts(
+    dataset_name,
+    model_name,
+    layer,
+    center=True,
+    scale=False,
+    device="cpu",
+    noperiod=False,
+    shuffle=False,
+    random_init=False,
+    revision=None,
+):
+    """
+    Collects activations from a dataset of statements, returns as a tensor of shape [n_activations, activation_dimension].
+    """
+    directory = get_path(
+        model_name,
+        dataset_name,
+        layer=layer,
+        noperiod=noperiod,
+        shuffle=shuffle,
+        random_init=random_init,
+        revision=revision,
+    )
+    if (
+        not directory.exists()
+        or not any(directory.iterdir())
+        or len(glob(str(directory / "batch_*.pt"))) == 0
+    ):
+        generate_acts(
+            model_name,
+            [layer],
+            [dataset_name],
+            ROOT / "acts",
+            noperiod=noperiod,
+            shuffle=shuffle,
+            random_init=random_init,
+            device=device,
+            revision=revision,
+        )
+    activation_files = sorted(
+        glob(str(directory / "batch_*.pt")),
+        key=lambda x: int(x.split("_")[-1].split(".")[0]),
+    )
+    acts = [th.load(file).to(device) for file in activation_files]
+    acts = th.cat(acts, dim=0).to(device)
+    if center:
+        acts = acts - th.mean(acts, dim=0)
+    if scale:
+        acts = acts / th.std(acts, dim=0)
+    return acts
 
 
 if __name__ == "__main__":
