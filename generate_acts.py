@@ -170,6 +170,7 @@ def generate_acts(
             shuffle=False,
         )
         idx = 0
+        clean = True
         for batch in tqdm(dataloader, desc=f"Generating activations"):
             acts = get_acts(
                 batch,
@@ -181,8 +182,13 @@ def generate_acts(
             )
             for layer, act in acts.items():
                 layer_dir = save_dir / f"layer_{layer}"
+                if layer_dir.exists() and clean:
+                    # Remove old activations
+                    for file in layer_dir.iterdir():
+                        file.unlink()
                 layer_dir.mkdir(parents=True, exist_ok=True)
                 th.save(act, layer_dir / f"batch_{idx}.pt")
+            clean = False
             idx += len(batch)
 
 
