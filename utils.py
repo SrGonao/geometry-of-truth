@@ -171,7 +171,9 @@ class DataManager:
             if seed is None:
                 seed = random.randint(0, 1000)
             th.manual_seed(seed)
-            train = th.randperm(len(df)) < int(split * len(df))
+            # train = th.randperm(len(df)) < int(split * len(df))
+            # no randperm
+            train = th.arange(0, len(df)) < int(split * len(df))
             val = ~train
             self.data["train"][dataset_name] = acts[train], labels[train]
             self.data["val"][dataset_name] = acts[val], labels[val]
