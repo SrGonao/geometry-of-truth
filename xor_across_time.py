@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 from pathlib import Path
 import pandas as pd
 import time
+from transformers import AutoConfig
 
 label_names = [
     "has_alice",
@@ -32,12 +33,14 @@ def xor_results(model, device, layers=None, checkpoints=None):
     if checkpoints is None:
         checkpoints = all_checkpoints
     if layers is None:
-        layers = list(range(model.config.num_hidden_layers + 1))
+        config = AutoConfig.from_pretrained(model)
+        layers = list(range(config.num_hidden_layers + 1))
     layer_accs = {}
     for layer in layers:
         checkpoint_accs = {}
         for i in checkpoints:
             revision = f"step{i}"
+            print(f"Layer {layer}, checkpoint {revision}")
             accs = {}
             for label_name in label_names:
                 dm = DataManager()
