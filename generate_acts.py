@@ -35,8 +35,8 @@ def load_model(model_name, device, revision=None, shuffle=False, random_init=Fal
         # create reset network by permuting the weights for each parameter
         for param in model.parameters():
             param.data = param.data[..., th.randperm(param.size(-1))]
-    if device != "cpu":
-        model = model.half()
+    # if device != "cpu":
+    #     model = model.half()
     model.to(device)
     return tokenizer, model
 
