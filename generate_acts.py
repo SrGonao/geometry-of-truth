@@ -12,6 +12,7 @@ import configparser
 from pathlib import Path
 from glob import glob
 from warnings import warn
+from mamba_model import PreMambaConfig, MambaModel, MambaTokenizer
 
 config = configparser.ConfigParser()
 config.read("config.ini")
@@ -54,20 +55,28 @@ def get_path(
 
 def load_model(model_name, device, revision=None, shuffle=False, random_init=False):
     print(f"Loading model {model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(
+    if "mamba" in model_name:
+        AutoConfig.register("mamba", PreMambaConfig)
+        AutoModelForCausalLM.register(PreMambaConfig, MambaModel)
+        AutoTokenizer.register(PreMambaConfig, MambaTokenizer)
+        tokenizer= MambaTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(
         model_name,
         token=HF_KEY,
         revision=revision,
     )
-    if random_init:
-        config = AutoConfig.from_pretrained(model_name, revision=revision, token=HF_KEY)
-        model = AutoModelForCausalLM.from_config(config)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            token=HF_KEY,
-            revision=revision,
-        )
+        if random_init:
+            config = AutoConfig.from_pretrained(model_name, revision=revision, token=HF_KEY)
+            model = AutoModelForCausalLM.from_config(config)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                token=HF_KEY,
+                revision=revision,
+            )
     if shuffle:
         # create reset network by permuting the weights for each parameter
         for param in model.parameters():
